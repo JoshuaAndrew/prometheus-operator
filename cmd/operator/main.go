@@ -17,6 +17,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/coreos/prometheus-operator/pkg/alertmanager"
 	"github.com/coreos/prometheus-operator/pkg/analytics"
+	"github.com/coreos/prometheus-operator/pkg/api"
 	"github.com/coreos/prometheus-operator/pkg/prometheus"
 	"github.com/go-kit/kit/log"
 )
@@ -66,6 +69,14 @@ func Main() int {
 		return 1
 	}
 
+	web := api.New()
+	web.Register(http.DefaultServeMux)
+	l, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		fmt.Fprint(os.Stderr, err)
+		return 1
+	}
+
 	stopc := make(chan struct{})
 	errc := make(chan error)
 	var wg sync.WaitGroup
@@ -86,11 +97,20 @@ func Main() int {
 		wg.Done()
 	}()
 
+	wg.Add(1)
+	go func() {
+		if err := http.Serve(l, nil); err != nil {
+			errc <- err
+		}
+		wg.Done()
+	}()
+
 	term := make(chan os.Signal)
 	signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 	select {
 	case <-term:
 		fmt.Fprint(os.Stdout, "Received SIGTERM, exiting gracefully...")
+		l.Close()
 		close(stopc)
 		wg.Wait()
 	case <-errc:
